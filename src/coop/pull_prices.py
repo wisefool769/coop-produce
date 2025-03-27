@@ -1,11 +1,10 @@
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 import datetime
-from io import StringIO
 import requests
-import pandas as pd
 import re
 from IPython import embed
 from argparse import ArgumentParser
+from bs4 import BeautifulSoup, Tag
 
 def clean_price(price_str: str) -> Optional[float]:
     match = re.search(r'\d+\.?\d*', price_str)
@@ -30,53 +29,70 @@ def extract_item(raw_name: str) -> str:
     item = re.sub(r'\s+(organic|label|ipm|conventional|bunch|loose)\s*$', '', item, flags=re.IGNORECASE)
     return item.strip()
 
-def scrape_produce_prices() -> pd.DataFrame:
+def scrape_produce_prices() -> List[Dict[str, Any]]:
     url: str = "https://www.foodcoop.com/produce/"
     response: requests.Response = requests.get(url)
     
-    tables: List[pd.DataFrame] = pd.read_html(StringIO(response.text))
+    soup = BeautifulSoup(response.text, 'lxml')
+    table = soup.find('table')
     
-    if len(tables) > 0:
-        df: pd.DataFrame = tables[0]
-        
-        # Remove unwanted column
-        df = df.drop(columns=[col for col in df.columns if 'Unnamed:' in col], errors='ignore')
-        
-        # Rename columns and convert to snake_case
-        df.columns = pd.Index([to_snake_case(col) for col in df.columns])
-        df = df.rename(columns={'organic': 'is_organic', 'name': 'raw'})
-        
-        # Clean up the data
-        if 'price' in df.columns:
-            df['price'] = df['price'].apply(clean_price)
-        df = df[~df["price"].isnull()]
-        
-        # Clean up other columns
-        for col in df.columns:
-            if df[col].dtype == 'object':
-                df[col] = df[col].str.strip()
-        
-        # Add is_local column
-        df['is_local'] = df['origin'].apply(is_local)
-        
-        # Add item column
-        df['item'] = df['raw'].apply(extract_item)
-        
-        # Sort values by price
-        df = df.sort_values('price')
-        return df
-    else:
+    if not table or not isinstance(table, Tag):
         raise ValueError("No tables found on the page. The website structure might have changed.")
-
-
-def generate_html(df: pd.DataFrame) -> str:
-    # Split the data into local and non-local
-    local_df: pd.DataFrame = df[df['is_local'] == True].sort_values('price')
-    non_local_df: pd.DataFrame = df[df['is_local'] == False].sort_values('price')
     
-    # Function to create an HTML table from a DataFrame
-    def df_to_html_table(df: pd.DataFrame) -> str:
-        return df[['raw', 'price', 'origin']].to_html(index=False, classes='data-table')
+    # Extract headers
+    headers = []
+    for th in table.find_all('th'):
+        header = to_snake_case(th.text.strip())
+        headers.append(header)
+    
+    # Extract rows
+    rows = []
+    for tr in table.find_all('tr')[1:]:  # Skip header row
+        if isinstance(tr, Tag):
+            row = []
+            for td in tr.find_all('td'):
+                row.append(td.text.strip())
+            if len(row) == len(headers):
+                # Create a dictionary for each row
+                row_dict = dict(zip(headers, row))
+                # Clean up the data
+                row_dict["price"] = clean_price(row_dict.get("price", ""))
+                if row_dict["price"] is not None:  # Only include rows with valid prices
+                    row_dict["is_organic"] = row_dict.get("organic", "").strip()
+                    row_dict["raw"] = row_dict.pop("name", "").strip()
+                    row_dict["is_local"] = is_local(row_dict.get("origin", ""))
+                    row_dict["item"] = extract_item(row_dict["raw"])
+                    rows.append(row_dict)
+    
+    # Sort by price
+    return sorted(rows, key=lambda x: x["price"])
+
+def generate_html(data: List[Dict[str, Any]]) -> str:
+    # Split the data into local and non-local
+    local_data = [item for item in data if item["is_local"]]
+    non_local_data = [item for item in data if not item["is_local"]]
+    
+    # Function to create an HTML table from data
+    def data_to_html_table(data: List[Dict[str, Any]]) -> str:
+        if not data:
+            return "<p>No items found.</p>"
+            
+        html = ['<table class="data-table">']
+        # Add headers
+        html.append('<tr>')
+        for header in ["raw", "price", "origin"]:
+            html.append(f'<th>{header}</th>')
+        html.append('</tr>')
+        
+        # Add rows
+        for row in data:
+            html.append('<tr>')
+            for key in ["raw", "price", "origin"]:
+                html.append(f'<td>{row[key]}</td>')
+            html.append('</tr>')
+        
+        html.append('</table>')
+        return '\n'.join(html)
     
     # Generate the HTML content
     html_content: str = f"""
@@ -99,10 +115,10 @@ def generate_html(df: pd.DataFrame) -> str:
         <p>Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
         
         <h2>Local Produce</h2>
-        {df_to_html_table(local_df)}
+        {data_to_html_table(local_data)}
         
         <h2>Non-Local Produce</h2>
-        {df_to_html_table(non_local_df)}
+        {data_to_html_table(non_local_data)}
     </body>
     </html>
     """
@@ -113,10 +129,10 @@ def main() -> None:
     parser = ArgumentParser()
     parser.add_argument("-d", "--debug", action="store_true")
     args = parser.parse_args()
-    df = scrape_produce_prices()
+    data = scrape_produce_prices()
     if args.debug:
         embed()
-    html_content = generate_html(df)
+    html_content = generate_html(data)
     # Write the HTML content to a file
     fname: str = "index.html"
     with open(fname, 'w') as f:
