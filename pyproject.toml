@@ -1,0 +1,26 @@
+[project]
+name = "coop"
+version = "0.1.0"
+description = "Food Co-op Price Scraper"
+requires-python = ">=3.10"
+dependencies = [
+    "beautifulsoup4==4.12.3",
+    "requests==2.32.3",
+    "pandas==2.2.2",
+    "lxml==5.3.0",
+    "ipython==8.26.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.rye]
+managed = true
+dev-dependencies = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/coop"]
+
+[tool.hatch.build]
+only-packages = true 
