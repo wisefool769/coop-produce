@@ -2,7 +2,7 @@
 name = "coop"
 version = "0.1.0"
 description = "Food Co-op Price Scraper"
-requires-python = ">=3.10"
+requires-pythion = ">=3.10"
 dependencies = [
     "beautifulsoup4==4.12.3",
     "requests==2.32.3",
